@@ -1,0 +1,173 @@
+---
+title: "exercise-11"
+author: "Yen Do"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(skimr)
+f <- "https://raw.githubusercontent.com/difiore/ada-datasets/main/Mammal_lifehistories_v2.txt"
+d <- read_tsv(f)
+skim(d)
+```
+
+Categorical variables: order, family, genus, species. Numeric variables: mass(g), gestation(mo), newborn(g), weaning(mo), wean mass(g), AFR(mo), max. life(mo), litter size, litters/year, refs.
+
+### Step 1: Replace all values of -999 (the authors’ code for missing data) with NA.
+
+```{r}
+library(naniar)
+replace_with_na_all(data = d, condition = ~.x == -999)
+```
+
+### Step 2: Drop the variables litter size and refs.
+
+```{r}
+library(dplyr)
+d <- d |> dplyr::select(-"litter size", - "refs")
+```
+
+### Step 3: Log transform all of the other numeric variables.
+
+```{r}
+d <- d |> mutate(across(where(is.numeric), log))
+head(d)
+```
+
+### Step 4: Regression
+
+```{r}
+relGest <- lm(`gestation(mo)` ~ `mass(g)`, data = d, na.action=na.exclude)
+relWean <- lm(`weaning(mo)` ~ `mass(g)`, data = d, na.action=na.exclude)
+relAFR <- lm(`AFR(mo)` ~ `mass(g)`, data = d, na.action=na.exclude)
+relLife <- lm(`max. life(mo)` ~ `mass(g)`, data = d, na.action=na.exclude)
+relNewbornMass <- lm(`newborn(g)` ~ `mass(g)`, data = d, na.action=na.exclude)
+relWeaningMass <- lm(`wean mass(g)` ~ `mass(g)`, data = d, na.action=na.exclude)
+
+
+d <- d |> mutate(relGest = residuals(relGest),
+                 relWean = residuals(relWean),
+                 relAFR = residuals(relAFR),
+                 relLife = residuals(relLife),
+                 relNewbornMass = residuals(relNewbornMass),
+                 relWeaningMass = residuals(relWeaningMass))
+
+```
+
+### Step 5: Plot residuals
+
+```{r}
+# Plot helper function
+plot_residuals <- function(resid_col, title) {
+  ggplot(d, aes(x = order, y = .data[[resid_col]])) +
+    geom_boxplot() +
+    coord_flip() +
+    theme_minimal() +
+    labs(title = title, y = "Residual", x = "Order")
+}
+
+plot_residuals("relLife", "Residual Max Lifespan by Order")
+plot_residuals("relNewbornMass", "Residual Newborn Mass by Order")
+plot_residuals("relWeaningMass", "Residual Weaning Mass by Order")
+
+```
+
+Which mammalian orders have the highest residual lifespan?
+
+Primates have the highest residual lifespan.
+
+Which mammalian orders have the have highest residual newborn mass?
+
+Macroscelidea have highest residual newborn mass.
+
+Which mammalian orders have the have highest residual weaning mass?
+
+Perissodactya have the have highest residual weaning mass.
+
+### Step 6: Model
+
+```{r}
+library(MASS)
+library(AICcmodavg)
+library(MuMIn)
+# Select variables for model
+d1 <- d %>%
+  drop_na(`max. life(mo)`, `gestation(mo)`, `newborn(g)`,
+          `weaning(mo)`, `wean mass(g)`, `litters/year`, `mass(g)`, `AFR(mo)`)
+
+# Full model
+m_max_life <- lm(`max. life(mo)` ~ `gestation(mo)` + `newborn(g)` +
+                   `weaning(mo)` + `wean mass(g)` +
+                   `litters/year` + `mass(g)`, data = d1, na.action = "na.fail")
+
+
+m_AFR <- lm(`AFR(mo)` ~ `gestation(mo)` + `newborn(g)` +
+                   `weaning(mo)` + `wean mass(g)` +
+                   `litters/year` + `mass(g)`, data = d1, na.action = "na.fail")
+
+```
+
+#### Model for max. life (mo)
+
+```{r}
+# Model for max. life(mo)
+mods_life <- dredge(m_max_life, beta = "none", m.lim = c(0, 4))
+# best model
+mods_life[1, ]
+
+# Number of models have delta AIC < 4
+sum(mods_life$delta < 4)
+
+# Calculate and plot the model-averaged coefficients and their CIs for max_life(mo)
+(mods.list_life <- get.models(mods_life, subset = TRUE))
+coef(mods_life)
+(mods.avg_life <- summary(model.avg(mods_life, subset = delta < 4, fit = TRUE)))
+confint(mods.avg_life)
+plot(mods.avg_life, full = TRUE, intercept = FALSE)
+
+```
+
+Best model (model 40): max. life(mo) \~ gestation(mo) + weaning(mo) + litters/year + mass(g)
+
+2 models have delta AICc \< 4
+
+Model-averaged coefficients: Mammals with longer gestation, weaning period, or higher mass tend to live longer.
+
+wean mass(g) is also positively associated, though its effect is smaller.
+
+litters/year is negatively associated — species with more litters per year tend to have shorter maximum lifespans (consistent with a "fast" life history strategy).
+
+#### Model for AFR(mo)
+
+```{r}
+mods_AFR <- dredge(m_AFR, beta = "none", m.lim = c(0, 4))
+# best model
+mods_AFR[1, ]
+
+# Number of models have delta AIC < 4
+sum(mods_AFR$delta < 4)
+
+
+# Calculate and plot the model-averaged coefficients and their CIs for AFR(mo)
+(mods.list_AFR <- get.models(mods_AFR, subset = TRUE))
+coef(mods_AFR)
+(mods.avg_AFR <- summary(model.avg(mods_AFR, subset = delta < 4, fit = TRUE)))
+confint(mods.avg_AFR)
+plot(mods.avg_AFR, full = TRUE, intercept = FALSE)
+
+
+```
+
+Best model (AICc = 321.23): AFR(mo) \~ gestation(mo) + weaning(mo) + litters/year + mass(g)
+
+7 models have delta AICc \< 4
+
+Model-averaged coefficients:
+
+Longer gestation → later reproduction
+
+Fewer litters per year → later reproduction
+
+Longer weaning duration also has a smaller but significant effect.
